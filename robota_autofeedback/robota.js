@@ -47,43 +47,53 @@ define([
 
         /**
          * Given a code cell, executes robota automated feedback. That is, it executes the appropriate
-         * validation/instruction against each row annotated with robota_suffix
+         * validation(s)/instruction(s) against each row annotated with robota_suffix
          * @param code_cell {CodeCell} - The code_cell object that should be validated.
          */
         var execute_cell_annotations = function (code_cell) {
-            let content = code_cell.get_text();
+            let feedback_separator = "\n# **Feedback**\n";
+            let raw_content = code_cell.get_text();
+            content = raw_content.split(feedback_separator)[0]
             let lines = content.split("\n");
             // Selecting those lines which contain the robota suffix
             let annotated_lines = lines.filter(l => l.includes(robota_suffix));
-            annotated_lines.forEach(l => execute_single_annotation(l));
+            let all_validation_results = annotated_lines.map(l => validate_line(l))
+            code_cell.set_text(content + feedback_separator);
+            all_validation_results.forEach(
+                avr => avr.forEach(
+                    vr => code_cell.set_text(code_cell.get_text() + "# " + vr.message + "\n")
+                )
+            );
         };
 
         /**
-         * Given an annotated line, executes the specified robota annotation against it.
+         * Given an annotated line, executes the specified robota annotation(s) against it.
          * @param annotated_line {string} - The annotated line
          */
-        var execute_single_annotation = function (annotated_line) {
+        var validate_line = function (annotated_line) {
             let line_tokens = annotated_line.split(robota_suffix);
             let line_input = line_tokens[0].replace("#", "").trim();
             let robota_annotation = line_tokens.pop();
             let annotation_tokens = robota_annotation.split(":").filter(t => t !== "")
-            console.log(annotation_tokens);
             let validators = parse_annotation_tokens(annotation_tokens);
-            console.log(validators);
 
             // create function
             let executor = function (line, f, parameters, name) {
                 let is_valid = f(line, ...parameters);
-                console.log(`Validator ${name} gave result ${is_valid}.`);
-                return is_valid;
+                return {
+                    is_valid: is_valid,
+                    message: `Validator ${name} gave result ${is_valid} for parameters ${parameters}.`
+                };
             };
 
-            validators.forEach(v => executor(
+            let validation_results = validators.map(v => executor(
                 line_input,
                 v["validator_function"],
                 v["parameters"],
                 v["name"]
             ));
+
+            return validation_results;
         };
 
         /**
