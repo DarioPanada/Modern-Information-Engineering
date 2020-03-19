@@ -19,15 +19,45 @@ define([
         * num_inputs should _EXCLUDE_ the first parameter in its count. So, if a validator only takes the line,
         * this should be 0.
         */
-        var validators = [
+        let validators = [
             {
                 name: "different",
                 description: "Checks that the value of the line is different from something.",
                 num_inputs: 1,
                 operator: "!=",
-                example: "!=:1",
+                example: "!robota:!=:1",
                 func: function (line, value) {
                     return line !== value;
+                }
+            },
+            {
+                name: "any",
+                description: "Check that the line is equal to one of a set of possibilities.",
+                num_inputs: "any",
+                operator: "any",
+                example: "!robota:any:a = 1:a = 2:a = 3",
+                func: function(line, ...values) {
+                    return values.some(v => v === line);
+                }
+            },
+            {
+                name: "is_conditional",
+                description: "Checks that the line contains a conditional. That is, an if statement",
+                num_inputs: 0,
+                operator: "is_conditional",
+                example: "!robota:is_conditional",
+                func: function(line) {
+                    return line.startsWith("if") && line.endsWith(":");
+                }
+            },
+            {
+                name: "is_for",
+                description: "Checks that the line contains a for loop.",
+                num_inputs: 0,
+                operator: "is_for",
+                example: "!robota:is_for",
+                func: function(line) {
+                    return line.startsWith("for") && line.includes("in") && line.endsWith(":");
                 }
             }
         ];
@@ -47,28 +77,36 @@ define([
 
         /**
          * Given a code cell, executes robota automated feedback. That is, it executes the appropriate
-         * validation(s)/instruction(s) against each row annotated with robota_suffix
+         * validation(s)/instruction(s) against each row annotated with robota_suffix. Then, feedback is
+         * appended as python comments to each cell.
          * @param code_cell {CodeCell} - The code_cell object that should be validated.
          */
         var execute_cell_annotations = function (code_cell) {
-            let feedback_separator = "\n# **Feedback**\n";
+            let feedback_separator = "\n\n# **Feedback**\n";
             let raw_content = code_cell.get_text();
-            content = raw_content.split(feedback_separator)[0]
+            let content = raw_content.split(feedback_separator)[0]
+            code_cell.set_text(content)
             let lines = content.split("\n");
             // Selecting those lines which contain the robota suffix
             let annotated_lines = lines.filter(l => l.includes(robota_suffix));
-            let all_validation_results = annotated_lines.map(l => validate_line(l))
-            code_cell.set_text(content + feedback_separator);
-            all_validation_results.forEach(
-                avr => avr.forEach(
-                    vr => code_cell.set_text(code_cell.get_text() + "# " + vr.message + "\n")
-                )
-            );
+            if(annotated_lines.length > 0) {
+                let all_validation_results = annotated_lines.map(l => validate_line(l))
+                code_cell.set_text(content + feedback_separator);
+                all_validation_results.forEach(
+                    avr => avr.forEach(
+                        vr => code_cell.set_text(code_cell.get_text() + "# " + vr.message + "\n")
+                    )
+                );
+            }
         };
 
         /**
          * Given an annotated line, executes the specified robota annotation(s) against it.
          * @param annotated_line {string} - The annotated line
+         * @returns Array{object} - An array containing one object per validator applied to the line. Each object
+         * contains a key is_valid, of type boolean, which indicates if the line validated against that validator.
+         * And a key message, of type string, which contains a human-friendly message concerning the result of the
+         * validator on that line.
          */
         var validate_line = function (annotated_line) {
             let line_tokens = annotated_line.split(robota_suffix);
@@ -77,12 +115,23 @@ define([
             let annotation_tokens = robota_annotation.split(":").filter(t => t !== "")
             let validators = parse_annotation_tokens(annotation_tokens);
 
-            // create function
+            // Function which executes each validator's function with the appropriate parameters, stores the
+            // resulting value and building a human_readable message.
             let executor = function (line, f, parameters, name) {
+                line = line.trim();
                 let is_valid = f(line, ...parameters);
+
+                let message = "";
+
+                if(parameters.length > 0) {
+                    message = `Validator ${name} gave result ${is_valid} for parameters ${parameters}. Line: ${line}`
+                } else {
+                    message = `Validator ${name} gave result ${is_valid}. Line: ${line}`
+                }
+
                 return {
                     is_valid: is_valid,
-                    message: `Validator ${name} gave result ${is_valid} for parameters ${parameters}.`
+                    message: message
                 };
             };
 
@@ -146,7 +195,7 @@ define([
                     // We have a validator but found another one. Or, we
                     // have a validator and this is the last token. Create function from current and
                     // get ready to process next.
-                    if (parameters.length != validator["num_inputs"]) {
+                    if (validator["num_inputs"] != "any" && parameters.length != validator["num_inputs"]) {
                         console.log(`${validator.operator} expects ${validator.num_inputs} inputs,` +
                             `but ${parameters.length} were found. Skipping.`);
                         continue
@@ -155,7 +204,7 @@ define([
                     let generated_object = {
                         validator_function: validator["func"],
                         parameters: parameters,
-                        name : validator["name"]
+                        name: validator["name"]
                     };
 
                     objects.push(generated_object);
